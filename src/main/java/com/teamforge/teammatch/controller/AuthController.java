@@ -12,7 +12,6 @@ import java.util.Locale;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
-import org.springframework.security.authentication.AuthenticationServiceException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -78,30 +77,35 @@ public class AuthController {
             HttpServletRequest servletRequest,
             HttpServletResponse servletResponse
     ) {
+        String normalizedEmail = request.email().trim().toLowerCase(Locale.ROOT);
         try {
             Authentication authentication = authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(request.email().trim(), request.password())
+                    new UsernamePasswordAuthenticationToken(normalizedEmail, request.password())
             );
             SecurityContext context = SecurityContextHolder.createEmptyContext();
             context.setAuthentication(authentication);
             SecurityContextHolder.setContext(context);
             securityContextRepository.saveContext(context, servletRequest, servletResponse);
             AppUser user = (AppUser) authentication.getPrincipal();
-            return ResponseEntity.ok(new LoginResponse(true, new UserProfile(authentication.getName(), user.getName(), "Member")));
+            return ResponseEntity.ok(new LoginResponse(true, new UserProfile(user.getUsername(), user.getName(), "Member")));
         } catch (BadCredentialsException exception) {
             SecurityContextHolder.clearContext();
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(new ErrorResponse("Invalid email or password."));
         } catch (AuthenticationException exception) {
             SecurityContextHolder.clearContext();
-            throw new AuthenticationServiceException("Authentication service is unavailable.", exception);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ErrorResponse("Invalid email or password."));
         }
     }
 
     @GetMapping("/me")
-    public LoginResponse currentUser(Authentication authentication) {
-        AppUser user = (AppUser) authentication.getPrincipal();
-        return new LoginResponse(true, new UserProfile(authentication.getName(), user.getName(), "Member"));
+    public ResponseEntity<?> currentUser(Authentication authentication) {
+        if (authentication == null || !(authentication.getPrincipal() instanceof AppUser user)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new ErrorResponse("Not authenticated."));
+        }
+        return ResponseEntity.ok(new LoginResponse(true, new UserProfile(user.getUsername(), user.getName(), "Member")));
     }
 
     @PostMapping("/logout")
@@ -110,7 +114,14 @@ public class AuthController {
             HttpServletResponse response,
             Authentication authentication
     ) {
-        new SecurityContextLogoutHandler().logout(request, response, authentication);
+        if (authentication != null) {
+            new SecurityContextLogoutHandler().logout(request, response, authentication);
+        }
+        jakarta.servlet.http.HttpSession session = request.getSession(false);
+        if (session != null) {
+            session.invalidate();
+        }
+        SecurityContextHolder.clearContext();
         return ResponseEntity.noContent().build();
     }
 
